@@ -1,0 +1,10 @@
+assistant:
+  name: "Джарвис"
+  wake_word: "jarvis"
+llm:
+  model: "qwen2.5:7b"
+  host: "http://localhost:11434"
+tts:
+  piper_model: "ru_RU-dmitri-medium.onnx"
+stt:
+  whisper_model: "small"
