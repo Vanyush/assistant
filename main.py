@@ -11,7 +11,7 @@ from core.tts import TextToSpeech
 from core.audio_output import AudioOutput
 from core.router import CommandRouter
 from core.executor import CommandExecutor
-from core.wake_word import VoskWakeWordDetector
+from core.wake_word import MicroWakeWordDetector
 
 
 async def main() -> None:
@@ -33,9 +33,8 @@ async def main() -> None:
 
     # Инициализация звуковых модулей
     stt = SpeechToText(model_size=config['stt']['whisper_model'])
-    wake_detector = VoskWakeWordDetector(
-        model_path=config["wake_word"]["model"],
-        wake_words=["джарвис"],
+    wake_detector = MicroWakeWordDetector(
+        config_path=config["wake_word"]["model"],
         cooldown_seconds=config["wake_word"].get(
             "cooldown_seconds",
             1.5,
@@ -45,7 +44,6 @@ async def main() -> None:
     mic = AudioInput(
         wake_word_detector=wake_detector,
     )
-
     mic.calibrate()
 
     feedback = AudioFeedback()

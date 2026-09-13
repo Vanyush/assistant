@@ -21,11 +21,89 @@ class WakeWordDetector(ABC):
         raise NotImplementedError
 
 
+class MicroWakeWordDetector(WakeWordDetector):
+    """
+    Streaming wake-word detector на базе microWakeWord.
+
+    На вход принимает PCM int16 mono, 16 kHz.
+    Внутри:
+        PCM -> MicroWakeWordFeatures -> TFLite model
+    """
+
+    SAMPLE_RATE = 16000
+
+    def __init__(
+        self,
+        config_path: str | Path,
+        cooldown_seconds: float = 1.5,
+    ) -> None:
+        from pymicro_wakeword import (
+            MicroWakeWord,
+            MicroWakeWordFeatures,
+        )
+
+        self.config_path = Path(config_path)
+        self.cooldown_seconds = cooldown_seconds
+        self.cooldown_until = 0.0
+
+        self.features = MicroWakeWordFeatures()
+        self.detector = MicroWakeWord.from_config(
+            self.config_path
+        )
+
+    def predict(
+        self,
+        audio_data: np.ndarray,
+    ) -> bool:
+        now = time.monotonic()
+
+        audio_data = np.asarray(
+            audio_data,
+            dtype=np.int16,
+        )
+
+        if audio_data.ndim > 1:
+            audio_data = audio_data[:, 0]
+
+        # MicroWakeWordFeatures ожидает raw PCM bytes:
+        # 16 kHz, 16-bit, mono.
+        for feature in self.features.process_streaming(
+            audio_data.tobytes()
+        ):
+            detected = self.detector.process_streaming(
+                feature
+            )
+
+            if not detected:
+                continue
+
+            if now < self.cooldown_until:
+                continue
+
+            self.cooldown_until = (
+                now + self.cooldown_seconds
+            )
+
+            return True
+
+        return False
+
+    def reset(self) -> None:
+        self.features.reset()
+        self.detector.reset()
+
+        self.cooldown_until = (
+            time.monotonic()
+            + self.cooldown_seconds
+        )
+
+
 class VoskWakeWordDetector(WakeWordDetector):
     """
-    Временный русскоязычный wake-word backend на Vosk.
+    Старый Vosk backend.
 
-    Vosk работает как continuous ASR с ограниченной grammar.
+    Оставляем его как fallback, пока microWakeWord
+    полностью не проверен.
     """
 
     SAMPLE_RATE = 16000
@@ -68,7 +146,6 @@ class VoskWakeWordDetector(WakeWordDetector):
         self,
         audio_data: np.ndarray,
     ) -> bool:
-
         now = time.monotonic()
 
         if now < self.cooldown_until:
@@ -108,15 +185,10 @@ class VoskWakeWordDetector(WakeWordDetector):
         if not self._contains_wake_word(text):
             return False
 
-        # --------------------------------------------------------------
-        # NEW EVENT
-        # --------------------------------------------------------------
-
         self.cooldown_until = (
             now + self.cooldown_seconds
         )
 
-        # Полностью начинаем новый ASR segment.
         self.recognizer.Reset()
 
         return True

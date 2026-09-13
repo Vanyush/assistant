@@ -16,6 +16,6 @@ stt:
   whisper_model: "small"
 
 wake_word:
-  backend: "vosk"
-  model: "assets/models/wake_word/vosk/vosk-model-small-ru-0.22"
+  backend: "microwakeword"
+  model: "assets/models/wake_word/ru_jarvis_mww.json"
   cooldown_seconds: 1.5
