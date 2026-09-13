@@ -9,6 +9,8 @@ from core.audio_input import AudioInput
 from core.audio_feedback import AudioFeedback
 from core.tts import TextToSpeech
 from core.audio_output import AudioOutput
+from core.router import CommandRouter
+from core.executor import CommandExecutor
 
 
 async def main() -> None:
@@ -19,15 +21,18 @@ async def main() -> None:
 
     print(f"[SYSTEM] Инициализация мозга ({config['llm']['model']})...")
     brain = Brain(
-        model_name=config['llm']['model'],
-        system_prompt_path="config/system_prompt.txt"
+        model_name=config["llm"]["model"],
+        system_prompt_path="config/system_prompt.txt",
+        base_url=config["llm"]["host"],
+        temperature=config["llm"].get("temperature", 0.2),
+        max_tokens=config["llm"].get("max_tokens", 256),
     )
-    
+
     # Инициализация звуковых модулей
     stt = SpeechToText(model_size=config['stt']['whisper_model'])
     mic = AudioInput()
     feedback = AudioFeedback()
-    
+
     # Сборка пути к модели Piper
     piper_model_path = os.path.join(
         "assets", "models", "piper", config["tts"]["piper_model"]
@@ -44,18 +49,18 @@ async def main() -> None:
             # 1. Ждем фразу "Джарвис"
             mic.listen_for_wake_word()
             feedback.play_activation()
-            
+
             # 2. Записываем команду до тишины
             audio_file = mic.record_command()
             if not audio_file:
                 print("[SYSTEM] Команда не была записана.")
                 continue
-            
+
             # 3. Распознаем речь
             print("[STT] Распознавание...")
             user_text = stt.transcribe(audio_file)
             print(f"\nВы сказали: {user_text}")
-            
+
             # Удаляем временный файл с голосом
             if os.path.exists(audio_file):
                 os.remove(audio_file)
@@ -68,15 +73,15 @@ async def main() -> None:
             print("[LLM] Думаю...")
             response = brain.process_input(user_text)
             print(f"\nДжарвис: {response}")
-            
+
             # 5. Глубокая очистка и подготовка текста для Piper
             clean_response = re.sub(r'[*_#`~]', '', response)
-            
+
             # Заменяем символы, которые ломают TTS (например, "69.0°C" -> "69.0 градусов")
             clean_response = clean_response.replace('°C', ' градусов')
             clean_response = clean_response.replace('CPU', 'процессора')
             clean_response = clean_response.replace('%', ' процента')
-            
+
             # Убираем всё, кроме русских букв, цифр, знаков препинания и пробелов
             # Это гарантирует, что Piper не подавится мусорными символами
             clean_response = re.sub(r'[^А-Яа-яЁё0-9.,!?:\-\s]', '', clean_response)
