@@ -45,6 +45,7 @@ class ApplicationResolver:
         "telegram": "telegram",
         "телеграм": "telegram",
         "телега": "telegram",
+        "телеграмм": "telegram",
 
         # Chrome
         "chrome": "chrome",

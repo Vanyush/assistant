@@ -14,3 +14,8 @@ tts:
 
 stt:
   whisper_model: "small"
+
+wake_word:
+  backend: "vosk"
+  model: "assets/models/wake_word/vosk/vosk-model-small-ru-0.22"
+  cooldown_seconds: 1.5

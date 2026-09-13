@@ -11,6 +11,7 @@ from core.tts import TextToSpeech
 from core.audio_output import AudioOutput
 from core.router import CommandRouter
 from core.executor import CommandExecutor
+from core.wake_word import VoskWakeWordDetector
 
 
 async def main() -> None:
@@ -27,10 +28,26 @@ async def main() -> None:
         temperature=config["llm"].get("temperature", 0.2),
         max_tokens=config["llm"].get("max_tokens", 256),
     )
+    router = CommandRouter()
+    executor = CommandExecutor()
 
     # Инициализация звуковых модулей
     stt = SpeechToText(model_size=config['stt']['whisper_model'])
-    mic = AudioInput()
+    wake_detector = VoskWakeWordDetector(
+        model_path=config["wake_word"]["model"],
+        wake_words=["джарвис"],
+        cooldown_seconds=config["wake_word"].get(
+            "cooldown_seconds",
+            1.5,
+        ),
+    )
+
+    mic = AudioInput(
+        wake_word_detector=wake_detector,
+    )
+
+    mic.calibrate()
+
     feedback = AudioFeedback()
 
     # Сборка пути к модели Piper
@@ -53,12 +70,18 @@ async def main() -> None:
             # 2. Записываем команду до тишины
             audio_file = mic.record_command()
             if not audio_file:
-                print("[SYSTEM] Команда не была записана.")
                 continue
 
-            # 3. Распознаем речь
-            print("[STT] Распознавание...")
-            user_text = stt.transcribe(audio_file)
+            try:
+                print("[STT] Распознавание...")
+                user_text = stt.transcribe(audio_file)
+
+            finally:
+                try:
+                    os.unlink(audio_file)
+                except FileNotFoundError:
+                    pass
+
             print(f"\nВы сказали: {user_text}")
 
             # Удаляем временный файл с голосом
@@ -70,9 +93,22 @@ async def main() -> None:
                 continue
 
             # 4. Передаем текст в LLM
-            print("[LLM] Думаю...")
-            response = brain.process_input(user_text)
-            print(f"\nДжарвис: {response}")
+            route = router.route(user_text)
+
+            if route is not None:
+                print(
+                    f"[ROUTER] Системная команда: "
+                    f"{route.command}"
+                )
+
+                response = executor.execute(
+                    route.command,
+                    route.arguments,
+                )
+            else:
+                print("[ROUTER] Обычный запрос → LLM")
+
+                response = brain.process_input(user_text)
 
             # 5. Глубокая очистка и подготовка текста для Piper
             clean_response = re.sub(r'[*_#`~]', '', response)
