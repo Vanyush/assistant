@@ -11,7 +11,10 @@ from core.tts import TextToSpeech
 from core.audio_output import AudioOutput
 from core.router import CommandRouter
 from core.executor import CommandExecutor
-from core.wake_word import MicroWakeWordDetector
+from core.wake_word import (
+    MicroWakeWordDetector,
+    VoskWakeWordDetector,
+)
 
 
 async def main() -> None:
@@ -33,13 +36,40 @@ async def main() -> None:
 
     # Инициализация звуковых модулей
     stt = SpeechToText(model_size=config['stt']['whisper_model'])
-    wake_detector = MicroWakeWordDetector(
-        config_path=config["wake_word"]["model"],
-        cooldown_seconds=config["wake_word"].get(
-            "cooldown_seconds",
-            1.5,
-        ),
+
+    wake_config = config["wake_word"]
+    wake_backend = wake_config.get(
+        "backend",
+        "microwakeword",
+    ).lower()
+
+    cooldown_seconds = wake_config.get(
+        "cooldown_seconds",
+        1.5,
     )
+
+    if wake_backend == "microwakeword":
+        wake_detector = MicroWakeWordDetector(
+            config_path=wake_config["model"],
+            cooldown_seconds=cooldown_seconds,
+        )
+
+    elif wake_backend == "vosk":
+        wake_detector = VoskWakeWordDetector(
+            model_path=wake_config["model"],
+            wake_words=[
+                config["assistant"].get(
+                    "wake_word",
+                    "Джарвис",
+                ).lower()
+            ],
+            cooldown_seconds=cooldown_seconds,
+        )
+
+    else:
+        raise ValueError(
+            f"Неизвестный wake-word backend: {wake_backend}"
+        )
 
     mic = AudioInput(
         wake_word_detector=wake_detector,

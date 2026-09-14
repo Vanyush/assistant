@@ -31,7 +31,7 @@ class AudioInput:
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
     RATE = 16000
-    CHUNK = 1280
+    CHUNK = 160
 
     def __init__(
         self,

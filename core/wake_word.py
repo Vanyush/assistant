@@ -51,28 +51,27 @@ class MicroWakeWordDetector(WakeWordDetector):
             self.config_path
         )
 
-    def predict(
-        self,
-        audio_data: np.ndarray,
-    ) -> bool:
+    def predict(self, audio_data: np.ndarray) -> bool:
         now = time.monotonic()
 
-        audio_data = np.asarray(
-            audio_data,
-            dtype=np.int16,
-        )
+        audio_data = np.asarray(audio_data, dtype=np.int16)
 
         if audio_data.ndim > 1:
             audio_data = audio_data[:, 0]
 
-        # MicroWakeWordFeatures ожидает raw PCM bytes:
-        # 16 kHz, 16-bit, mono.
+        audio_f32 = audio_data.astype(np.float32)
+        audio_f32 -= np.mean(audio_f32)
+
+        audio_data = np.clip(
+            audio_f32,
+            -32768,
+            32767,
+        ).astype(np.int16)
+
         for feature in self.features.process_streaming(
             audio_data.tobytes()
         ):
-            detected = self.detector.process_streaming(
-                feature
-            )
+            detected = self.detector.process_streaming(feature)
 
             if not detected:
                 continue
@@ -80,9 +79,7 @@ class MicroWakeWordDetector(WakeWordDetector):
             if now < self.cooldown_until:
                 continue
 
-            self.cooldown_until = (
-                now + self.cooldown_seconds
-            )
+            self.cooldown_until = now + self.cooldown_seconds
 
             return True
 
