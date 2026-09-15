@@ -19,3 +19,5 @@ wake_word:
   backend: "microwakeword"
   model: "assets/models/wake_word/ru_jarvis_mww.json"
   cooldown_seconds: 1.5
+  probability_cutoff: 0.2   # lower this (e.g. 0.3) if debug shows prob peaking below cutoff
+  debug: true               # turn on to see live prob values while you say "Джарвис"

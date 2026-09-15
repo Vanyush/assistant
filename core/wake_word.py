@@ -28,6 +28,17 @@ class MicroWakeWordDetector(WakeWordDetector):
     На вход принимает PCM int16 mono, 16 kHz.
     Внутри:
         PCM -> MicroWakeWordFeatures -> TFLite model
+
+    FIX: раньше этот класс использовал detector.process_streaming(feature),
+    встроенное bool-решение, которое ничего не сообщало о реальной
+    вероятности срабатывания. Если probability_cutoff модели оказывался
+    чуть выше реального пика вероятности для "Джарвис", детектор молча
+    никогда не срабатывал — и это было невозможно увидеть в логах.
+
+    Теперь используется process_streaming_prob() + явное сравнение с
+    настраиваемым cutoff, а при debug=True вероятность печатается в
+    реальном времени — то же самое, что делал test_mww.py при ручной
+    калибровке, но прямо в рабочем пайплайне main.py.
     """
 
     SAMPLE_RATE = 16000
@@ -36,6 +47,8 @@ class MicroWakeWordDetector(WakeWordDetector):
         self,
         config_path: str | Path,
         cooldown_seconds: float = 1.5,
+        probability_cutoff: float | None = None,
+        debug: bool = False,
     ) -> None:
         from pymicro_wakeword import (
             MicroWakeWord,
@@ -45,11 +58,15 @@ class MicroWakeWordDetector(WakeWordDetector):
         self.config_path = Path(config_path)
         self.cooldown_seconds = cooldown_seconds
         self.cooldown_until = 0.0
+        self.debug = debug
 
         self.features = MicroWakeWordFeatures()
         self.detector = MicroWakeWord.from_config(
             self.config_path
         )
+
+        if probability_cutoff is not None:
+            self.detector.probability_cutoff = probability_cutoff
 
     def predict(self, audio_data: np.ndarray) -> bool:
         now = time.monotonic()
@@ -71,15 +88,26 @@ class MicroWakeWordDetector(WakeWordDetector):
         for feature in self.features.process_streaming(
             audio_data.tobytes()
         ):
-            detected = self.detector.process_streaming(feature)
+            prob = self.detector.process_streaming_prob(feature)
 
-            if not detected:
+            if self.debug:
+                print(
+                    f"\r[WAKEWORD] prob={prob:.3f} "
+                    f"cutoff={self.detector.probability_cutoff:.3f}   ",
+                    end="",
+                    flush=True,
+                )
+
+            if prob < self.detector.probability_cutoff:
                 continue
 
             if now < self.cooldown_until:
                 continue
 
             self.cooldown_until = now + self.cooldown_seconds
+
+            if self.debug:
+                print()
 
             return True
 

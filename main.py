@@ -52,6 +52,8 @@ async def main() -> None:
         wake_detector = MicroWakeWordDetector(
             config_path=wake_config["model"],
             cooldown_seconds=cooldown_seconds,
+            probability_cutoff=wake_config.get("probability_cutoff"),
+            debug=wake_config.get("debug", False),
         )
 
     elif wake_backend == "vosk":
