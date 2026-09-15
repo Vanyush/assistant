@@ -1,6 +1,6 @@
 assets/
-core/__pycache__/*
-tools/__pycache__/*
+core/__pycache__/
+tools/__pycache__/
 core/__pycache__/applications.cpython-311.pyc
 core/__pycache__/audio_feedback.cpython-311.pyc
 core/__pycache__/audio_input.cpython-311.pyc
