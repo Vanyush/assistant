@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+import time
 import wave
 from collections import deque
+from typing import Any
 
 import numpy as np
 import pyaudio
@@ -11,31 +14,21 @@ import pyaudio
 from core.wake_word import WakeWordDetector
 
 
+logger = logging.getLogger(__name__)
+
+
 class AudioInput:
-    """
-    Работа с микрофоном.
-
-    Схема:
-
-        Vosk wake word
-             ↓
-        beep
-             ↓
-        калибровка шума
-             ↓
-        запись команды
-             ↓
-        WAV
-    """
+    """Захват аудио, калибровка микрофона и запись голосовой команды."""
 
     FORMAT = pyaudio.paInt16
     CHANNELS = 1
     RATE = 16000
-    CHUNK = 160
+    CHUNK = 1280
 
     def __init__(
         self,
         wake_word_detector: WakeWordDetector,
+        input_device_index: int | None = None,
         noise_multiplier: float = 3.0,
         min_speech_threshold: float = 180.0,
         max_speech_threshold: float = 500.0,
@@ -43,209 +36,117 @@ class AudioInput:
         silence_duration: float = 1.2,
         command_timeout: float = 5.0,
         pre_roll_chunks: int = 3,
+        debug: bool = False,
     ) -> None:
-
         self.audio = pyaudio.PyAudio()
-
-        self.wake_word_detector = (
-            wake_word_detector
-        )
-
-        self.noise_multiplier = (
-            noise_multiplier
-        )
-
-        self.min_speech_threshold = (
-            min_speech_threshold
-        )
-
-        self.max_speech_threshold = (
-            max_speech_threshold
-        )
-
-        self.calibration_seconds = (
-            calibration_seconds
-        )
-
-        self.silence_duration = (
-            silence_duration
-        )
-
-        self.command_timeout = (
-            command_timeout
-        )
-
-        self.pre_roll_chunks = (
-            pre_roll_chunks
-        )
+        self.wake_word_detector = wake_word_detector
+        self.input_device_index = input_device_index
+        self.noise_multiplier = noise_multiplier
+        self.min_speech_threshold = min_speech_threshold
+        self.max_speech_threshold = max_speech_threshold
+        self.calibration_seconds = calibration_seconds
+        self.silence_duration = silence_duration
+        self.command_timeout = command_timeout
+        self.pre_roll_chunks = pre_roll_chunks
+        self.debug = debug
 
         self.noise_floor: float | None = None
         self.speech_threshold: float | None = None
+        self.last_rms_log_at = 0.0
 
-    # ==================================================================
-    # WAKE WORD
-    # ==================================================================
+        if self.debug:
+            self._log_input_devices()
 
-    def listen_for_wake_word(self) -> bool:
-        """
-        Ожидание wake word.
-        """
+    def _log_input_devices(self) -> None:
+        """Выводит устройства только в debug-логе."""
+        for index in range(self.audio.get_device_count()):
+            device = self.audio.get_device_info_by_index(index)
+            channels = device.get("maxInputChannels", 0)
 
-        stream = self.audio.open(
+            if isinstance(channels, (int, float)) and channels > 0:
+                logger.debug(
+                    "Устройство ввода: index=%d name=%s",
+                    index,
+                    device.get("name", "unknown"),
+                )
+
+    def _open_stream(self) -> Any:
+        return self.audio.open(
             format=self.FORMAT,
             channels=self.CHANNELS,
             rate=self.RATE,
             input=True,
+            input_device_index=self.input_device_index,
             frames_per_buffer=self.CHUNK,
         )
 
-        print(
-            '\n[AUDIO] '
-            'Ожидание "Джарвис"...'
-        )
+    def listen_for_wake_word(self) -> bool:
+        """Ожидает wake-word."""
+        self.wake_word_detector.reset()
+        stream = self._open_stream()
 
         try:
             while True:
-
                 data = stream.read(
                     self.CHUNK,
                     exception_on_overflow=False,
                 )
+                audio = np.frombuffer(data, dtype=np.int16)
 
-                audio = np.frombuffer(
-                    data,
-                    dtype=np.int16,
-                )
-
-                detected = (
-                    self.wake_word_detector.predict(
-                        audio
-                    )
-                )
-
-                if detected:
-
-                    print(
-                        '\n[AUDIO] '
-                        'Wake word обнаружен.'
-                    )
-
+                if self.wake_word_detector.predict(audio):
+                    logger.info("Wake-word обнаружен.")
                     return True
-
         finally:
             stream.stop_stream()
             stream.close()
 
-    # ==================================================================
-    # CALIBRATION
-    # ==================================================================
-
     def calibrate(self) -> None:
-        """
-        Однократная калибровка фонового шума.
-
-        Вызывается один раз перед запуском основного цикла.
-        Результат сохраняется в self.noise_floor
-        и self.speech_threshold.
-        """
-
-        stream = self.audio.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
-            input=True,
-            frames_per_buffer=self.CHUNK,
-        )
+        """Измеряет фоновый шум и вычисляет порог речи."""
+        stream = self._open_stream()
 
         try:
-            print(
-                '\n[AUDIO] '
-                'Калибровка микрофона...'
-            )
+            logger.info("Калибровка микрофона…")
 
-            print(
-                '[AUDIO] '
-                f'Не говорите {self.calibration_seconds:.1f} с.'
-            )
-
-            threshold = self._calibrate_noise(
+            noise_floor, threshold = self._calibrate_noise(
                 stream
             )
 
+            self.noise_floor = noise_floor
             self.speech_threshold = threshold
 
-            print(
-                '[AUDIO] '
-                f'Порог речи: '
-                f'{threshold:.1f}'
-            )
+            logger.info("Микрофон откалиброван.")
 
-            print(
-                '[AUDIO] '
-                'Калибровка завершена.'
+            logger.debug(
+                "Калибровка: noise_floor=%.1f, threshold=%.1f",
+                noise_floor,
+                threshold,
             )
-
         finally:
             stream.stop_stream()
             stream.close()
 
-    # ==================================================================
-    # COMMAND RECORDING
-    # ==================================================================
-
     def record_command(self) -> str:
-        """
-        Записывает голосовую команду.
+        """Записывает команду до завершения речи."""
+        if self.speech_threshold is None:
+            raise RuntimeError(
+                "Микрофон не откалиброван."
+            )
 
-        Сначала вычисляется уровень фонового шума.
-        При расчёте всегда удаляется DC offset.
-        """
-
-        stream = self.audio.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
-            input=True,
-            frames_per_buffer=self.CHUNK,
-        )
+        stream = self._open_stream()
 
         try:
-
-            if self.speech_threshold is None:
-                raise RuntimeError(
-                    'Микрофон не откалиброван. '
-                    'Сначала вызовите audio.calibrate().'
-                )
-
             return self._record_from_stream(
                 stream,
                 self.speech_threshold,
             )
-
         finally:
-
             stream.stop_stream()
             stream.close()
 
-    # ==================================================================
-    # CALIBRATION
-    # ==================================================================
-
     def _calibrate_noise(
         self,
-        stream,
-    ) -> float:
-        """
-        Оценивает уровень тишины.
-
-        Ключевые свойства:
-
-        1. Удаляется DC offset.
-        2. Используется медиана/percentile,
-           а не максимум.
-        3. Порог ограничен сверху.
-        """
-
+        stream: Any,
+    ) -> tuple[float, float]:
         rms_values: list[float] = []
 
         chunk_count = max(
@@ -258,66 +159,38 @@ class AudioInput:
         )
 
         for _ in range(chunk_count):
-
             data = stream.read(
                 self.CHUNK,
                 exception_on_overflow=False,
             )
-
             audio = np.frombuffer(
                 data,
                 dtype=np.int16,
             ).astype(np.float32)
 
-            rms = self._centered_rms(
-                audio
-            )
+            rms_values.append(self._centered_rms(audio))
 
-            rms_values.append(rms)
+        noise_floor = float(np.median(rms_values))
 
-        # Основной уровень фонового шума.
-        noise_floor = float(
-            np.median(
-                rms_values
-            )
-        )
-
-        threshold = (
-            noise_floor
-            * self.noise_multiplier
-        )
-
-        # Нижняя граница.
-        threshold = max(
-            threshold,
-            self.min_speech_threshold,
-        )
-
-        # Верхняя граница.
         threshold = min(
-            threshold,
+            max(
+                noise_floor * self.noise_multiplier,
+                self.min_speech_threshold,
+            ),
             self.max_speech_threshold,
         )
 
-        print(
-            '[AUDIO] '
-            f'Noise floor: '
-            f'{noise_floor:.1f}'
-        )
-
-        return threshold
-
-    # ==================================================================
-    # RECORD
-    # ==================================================================
+        return noise_floor, threshold
 
     def _record_from_stream(
         self,
-        stream,
+        stream: Any,
         threshold: float,
     ) -> str:
-
         frames: list[bytes] = []
+        pre_roll: deque[bytes] = deque(
+            maxlen=self.pre_roll_chunks
+        )
 
         speech_started = False
         silent_chunks = 0
@@ -331,7 +204,6 @@ class AudioInput:
                 * self.silence_duration
             ),
         )
-
         max_timeout_chunks = max(
             1,
             int(
@@ -341,186 +213,90 @@ class AudioInput:
             ),
         )
 
-        pre_roll: deque[bytes] = deque(
-            maxlen=self.pre_roll_chunks
-        )
-
-        print(
-            '[AUDIO] '
-            'Говорите...'
-        )
+        logger.info("Слушаю…")
 
         while True:
-
             data = stream.read(
                 self.CHUNK,
                 exception_on_overflow=False,
             )
-
             audio = np.frombuffer(
                 data,
                 dtype=np.int16,
             ).astype(np.float32)
 
-            rms = self._centered_rms(
-                audio
-            )
-
-            print(
-                '\r[AUDIO] '
-                f'RMS={rms:6.1f} '
-                f'{"SPEECH" if speech_started else "WAIT"}   ',
-                end='',
-                flush=True,
-            )
-
+            rms = self._centered_rms(audio)
             pre_roll.append(data)
 
-            # ----------------------------------------------------------
-            # Речь обнаружена
-            # ----------------------------------------------------------
+            now = time.monotonic()
+
+            if (
+                self.debug
+                and now - self.last_rms_log_at >= 1.0
+            ):
+                logger.debug(
+                    "Запись команды: rms=%.1f threshold=%.1f "
+                    "speech_started=%s",
+                    rms,
+                    threshold,
+                    speech_started,
+                )
+                self.last_rms_log_at = now
 
             if rms >= threshold:
-
                 if not speech_started:
-
                     speech_started = True
-
-                    # Добавляем несколько предыдущих chunks,
-                    # чтобы не потерять начало слова.
-                    frames.extend(
-                        pre_roll
-                    )
-
+                    frames.extend(pre_roll)
                 else:
-
-                    frames.append(
-                        data
-                    )
+                    frames.append(data)
 
                 silent_chunks = 0
                 timeout_chunks = 0
+                continue
+
+            if not speech_started:
+                timeout_chunks += 1
+
+                if timeout_chunks >= max_timeout_chunks:
+                    logger.info("Команда не обнаружена.")
+                    return ""
 
                 continue
 
-            # ----------------------------------------------------------
-            # Тишина
-            # ----------------------------------------------------------
+            frames.append(data)
+            silent_chunks += 1
 
-            if not speech_started:
+            if silent_chunks >= max_silent_chunks:
+                logger.info("Фраза записана.")
+                break
 
-                timeout_chunks += 1
-
-                if (
-                    timeout_chunks
-                    >= max_timeout_chunks
-                ):
-                    print(
-                        '\n[AUDIO] '
-                        'Команда не обнаружена.'
-                    )
-
-                    return ''
-
-            else:
-
-                frames.append(
-                    data
-                )
-
-                silent_chunks += 1
-
-                if (
-                    silent_chunks
-                    >= max_silent_chunks
-                ):
-
-                    print(
-                        '\n[AUDIO] '
-                        'Конец фразы.'
-                    )
-
-                    break
-
-        if not frames:
-            return ''
-
-        return self._save_wav(
-            frames
-        )
-
-    # ==================================================================
-    # SIGNAL PROCESSING
-    # ==================================================================
+        return self._save_wav(frames)
 
     @staticmethod
-    def _centered_rms(
-        audio: np.ndarray,
-    ) -> float:
-        """
-        RMS после удаления DC offset.
-
-        Для твоего микрофона это критично:
-        raw signal находится примерно около 8192.
-        """
-
-        centered = (
-            audio
-            - np.mean(audio)
-        )
+    def _centered_rms(audio: np.ndarray) -> float:
+        """RMS аудиосигнала после удаления DC-смещения."""
+        centered = audio - np.mean(audio)
 
         return float(
-            np.sqrt(
-                np.mean(
-                    centered ** 2
-                )
-            )
+            np.sqrt(np.mean(centered**2))
         )
 
-    # ==================================================================
-    # WAV
-    # ==================================================================
-
-    def _save_wav(
-        self,
-        frames: list[bytes],
-    ) -> str:
-
+    def _save_wav(self, frames: list[bytes]) -> str:
         fd, path = tempfile.mkstemp(
-            suffix='.wav',
-            prefix='jarvis_',
+            suffix=".wav",
+            prefix="jarvis_",
         )
-
         os.close(fd)
 
-        with wave.open(
-            path,
-            'wb',
-        ) as wav:
-
-            wav.setnchannels(
-                self.CHANNELS
+        with wave.open(path, "wb") as wav_file:
+            wav_file.setnchannels(self.CHANNELS)
+            wav_file.setsampwidth(
+                self.audio.get_sample_size(self.FORMAT)
             )
-
-            wav.setsampwidth(
-                self.audio.get_sample_size(
-                    self.FORMAT
-                )
-            )
-
-            wav.setframerate(
-                self.RATE
-            )
-
-            wav.writeframes(
-                b''.join(frames)
-            )
+            wav_file.setframerate(self.RATE)
+            wav_file.writeframes(b"".join(frames))
 
         return path
-
-    # ==================================================================
-    # CLEANUP
-    # ==================================================================
 
     def close(self) -> None:
         self.audio.terminate()

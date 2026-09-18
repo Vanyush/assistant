@@ -1,6 +1,11 @@
 assistant:
   name: "Джарвис"
-  wake_word: "Джарвис"
+  wake_word: "Куза"
+
+logging:
+  console_level: "INFO"
+  file_level: "DEBUG"
+  file: "logs/assistant.log"
 
 llm:
   provider: "lmstudio"
@@ -15,9 +20,12 @@ tts:
 stt:
   whisper_model: "small"
 
+audio:
+  input_device_index: 5
+  debug: false
+
 wake_word:
   backend: "microwakeword"
-  model: "assets/models/wake_word/ru_jarvis_mww.json"
+  model: "assets/models/wake_word/kuza/kuza.json"
   cooldown_seconds: 1.5
-  probability_cutoff: 0.2   # lower this (e.g. 0.3) if debug shows prob peaking below cutoff
-  debug: true               # turn on to see live prob values while you say "Джарвис"
+  debug: false

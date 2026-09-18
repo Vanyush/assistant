@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from core.applications import ApplicationResolver
 from tools.registry import TOOLS_REGISTRY
 
 
+logger = logging.getLogger(__name__)
+
+
 class CommandExecutor:
-    """
-    Выполняет локальные команды без LLM.
-    """
+    """Выполняет локальные команды без LLM."""
 
     def __init__(self) -> None:
         self.applications = ApplicationResolver()
@@ -19,10 +21,11 @@ class CommandExecutor:
         command: str,
         arguments: dict[str, Any],
     ) -> str:
-
-        print(
-            f"[SYSTEM] Выполнение: "
-            f"{command}({arguments})"
+        logger.info("Выполнение команды: %s.", command)
+        logger.debug(
+            "Аргументы команды %s: %s",
+            command,
+            arguments,
         )
 
         if command == "open_application":
@@ -35,21 +38,19 @@ class CommandExecutor:
                 arguments.get("app_name", "")
             )
 
-        func = TOOLS_REGISTRY.get(command)
+        function = TOOLS_REGISTRY.get(command)
 
-        if func is None:
+        if function is None:
             return (
-                f"Неизвестная системная "
-                f"команда: {command}"
+                "Неизвестная системная команда: "
+                f"{command}"
             )
 
         try:
-            result = func(**arguments)
-
+            return str(function(**arguments))
         except Exception as exc:
-            return (
-                f"Ошибка выполнения команды: "
-                f"{exc}"
+            logger.exception(
+                "Ошибка выполнения команды: %s",
+                command,
             )
-
-        return str(result)
+            return f"Ошибка выполнения команды: {exc}"

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from openai import OpenAI
 
 from tools.registry import TOOLS_REGISTRY, TOOL_SCHEMAS
-import tools.system
+import tools.system as _system_tools
+
+
+logger = logging.getLogger(__name__)
 
 
 class Brain:
@@ -30,8 +34,12 @@ class Brain:
             api_key="lm-studio",
         )
 
-        with open(system_prompt_path, "r", encoding="utf-8") as f:
-            system_prompt = f.read()
+        with open(
+            system_prompt_path,
+            "r",
+            encoding="utf-8",
+        ) as prompt_file:
+            system_prompt = prompt_file.read()
 
         self.messages: list[dict[str, Any]] = [
             {
@@ -40,10 +48,15 @@ class Brain:
             }
         ]
 
-    @staticmethod
-    def _extract_qwen_tool_call(text: str) -> dict[str, Any] | None:
-        """Пытается извлечь JSON-вызов инструмента из текстового ответа модели."""
+        logger.info(
+            "LLM подключена: %s.",
+            model_name,
+        )
 
+    @staticmethod
+    def _extract_qwen_tool_call(
+        text: str,
+    ) -> dict[str, Any] | None:
         match = re.search(
             r'(\{.*?"name"\s*:\s*".*?".*?"arguments"\s*:.*\})',
             text,
@@ -53,16 +66,15 @@ class Brain:
         if not match:
             return None
 
-        json_str = match.group(1)
-
-        clean_json = "".join(
-            char
-            for char in json_str
-            if char.isprintable() or char in "\n\r\t"
+        json_text = "".join(
+            character
+            for character in match.group(1)
+            if character.isprintable()
+            or character in "\n\r\t"
         )
 
         try:
-            data = json.loads(clean_json)
+            data = json.loads(json_text)
         except json.JSONDecodeError:
             return None
 
@@ -76,11 +88,7 @@ class Brain:
 
     @staticmethod
     def _is_system_command(text: str) -> bool:
-        """Пока оставляем старую проверку до появления отдельного Router."""
-
-        text = text.lower()
-
-        trigger_words = [
+        trigger_words = (
             "громкост",
             "тише",
             "громче",
@@ -99,19 +107,23 @@ class Brain:
             "открой",
             "запусти",
             "закрой",
-        ]
+        )
 
-        return any(word in text for word in trigger_words)
+        normalized_text = text.lower()
+
+        return any(
+            word in normalized_text
+            for word in trigger_words
+        )
 
     def _trim_history(self) -> None:
-        """Оставляем системный prompt и последние сообщения."""
-
         if len(self.messages) > 7:
-            self.messages = [self.messages[0]] + self.messages[-6:]
+            self.messages = [
+                self.messages[0],
+                *self.messages[-6:],
+            ]
 
     def _chat(self) -> Any:
-        """Отправляет текущий context в LM Studio."""
-
         return self.client.chat.completions.create(
             model=self.model_name,
             messages=self.messages,
@@ -121,11 +133,11 @@ class Brain:
         )
 
     def process_input(self, user_text: str) -> str:
-        """Обрабатывает пользовательский запрос через локальную LLM."""
-
         if self._is_system_command(user_text):
-            print("[DEBUG] Обнаружена системная команда.")
             self.messages = [self.messages[0]]
+            logger.debug(
+                "Контекст очищен для системной команды."
+            )
         else:
             self._trim_history()
 
@@ -136,10 +148,9 @@ class Brain:
             }
         )
 
-        print("[LLM] Запрос в LM Studio...")
+        logger.info("LLM обрабатывает запрос.")
 
         response = self._chat()
-
         message = response.choices[0].message
 
         message_dict: dict[str, Any] = {
@@ -150,75 +161,83 @@ class Brain:
         tool_calls = getattr(message, "tool_calls", None)
 
         if tool_calls:
-            message_dict["tool_calls"] = []
-
-            for call in tool_calls:
-                message_dict["tool_calls"].append(
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments,
-                        },
-                    }
-                )
+            message_dict["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in tool_calls
+            ]
 
         self.messages.append(message_dict)
 
         content = message.content or ""
 
-        # Обычный текстовый ответ
         if not tool_calls:
             parsed_call = None
 
             if '"name"' in content and '"arguments"' in content:
-                parsed_call = self._extract_qwen_tool_call(content)
+                parsed_call = self._extract_qwen_tool_call(
+                    content
+                )
 
             if parsed_call is None:
                 return content
 
-            tool_name = parsed_call["name"]
-            args = parsed_call.get("arguments", {})
+            return self._execute_tool(
+                parsed_call["name"],
+                parsed_call.get("arguments", {}),
+            )
 
-            return self._execute_tool(tool_name, args)
-
-        # Нормальный OpenAI-compatible tool call
         call = tool_calls[0]
 
-        func_name = call.function.name
-        raw_args = call.function.arguments
-
         try:
-            args = json.loads(raw_args)
+            arguments = json.loads(
+                call.function.arguments
+            )
         except json.JSONDecodeError:
-            args = {}
+            arguments = {}
 
-        return self._execute_tool(func_name, args, call.id)
+        return self._execute_tool(
+            call.function.name,
+            arguments,
+            call.id,
+        )
 
     def _execute_tool(
         self,
-        func_name: str,
-        args: dict[str, Any],
+        function_name: str,
+        arguments: dict[str, Any],
         tool_call_id: str | None = None,
     ) -> str:
-        """Выполняет tool и при необходимости получает финальный ответ LLM."""
+        logger.info(
+            "LLM выполняет инструмент: %s.",
+            function_name,
+        )
+        logger.debug(
+            "Аргументы инструмента %s: %s",
+            function_name,
+            arguments,
+        )
 
-        print(f"[SYSTEM] Джарвис выполняет: {func_name}({args})")
+        function = TOOLS_REGISTRY.get(function_name)
 
-        if func_name not in TOOLS_REGISTRY:
-            return f"Неизвестная команда: {func_name}"
-
-        func = TOOLS_REGISTRY[func_name]
+        if function is None:
+            return f"Неизвестная команда: {function_name}"
 
         try:
-            result = func(**args)
+            result = function(**arguments)
         except Exception as exc:
+            logger.exception(
+                "Ошибка инструмента: %s",
+                function_name,
+            )
             result = f"Ошибка выполнения: {exc}"
 
-        # Пока сохраняем текущую архитектуру:
-        # результат команды возвращается обратно в LLM
-        # для формирования естественного ответа.
         if tool_call_id is not None:
             self.messages.append(
                 {
@@ -232,21 +251,25 @@ class Brain:
                 {
                     "role": "user",
                     "content": (
-                        f"Результат выполнения функции {func_name}: "
-                        f"{result}. Ответь пользователю кратко."
+                        f"Результат функции {function_name}: "
+                        f"{result}. Ответь кратко."
                     ),
                 }
             )
 
-        final_response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=self.messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+        final_response = (
+            self.client.chat.completions.create(
+                model=self.model_name,
+                messages=self.messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
         )
 
-        final_message = final_response.choices[0].message
-        final_content = final_message.content or ""
+        final_content = (
+            final_response.choices[0].message.content
+            or ""
+        )
 
         self.messages.append(
             {

@@ -1,29 +1,64 @@
+from __future__ import annotations
+
 import asyncio
+import logging
 import os
 import re
+
 import yaml
 
-from core.llm import Brain
-from core.stt import SpeechToText
-from core.audio_input import AudioInput
 from core.audio_feedback import AudioFeedback
-from core.tts import TextToSpeech
+from core.audio_input import AudioInput
 from core.audio_output import AudioOutput
-from core.router import CommandRouter
 from core.executor import CommandExecutor
+from core.llm import Brain
+from core.logging_config import configure_logging
+from core.router import CommandRouter
+from core.stt import SpeechToText
+from core.tts import TextToSpeech
 from core.wake_word import (
     MicroWakeWordDetector,
     VoskWakeWordDetector,
 )
 
 
-async def main() -> None:
-    """Главный цикл работы голосового ассистента."""
-    print("[SYSTEM] Загрузка конфигурации...")
-    with open("config/config.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+logger = logging.getLogger(__name__)
 
-    print(f"[SYSTEM] Инициализация мозга ({config['llm']['model']})...")
+
+def sanitize_for_tts(text: str) -> str:
+    """Очищает ответ для корректного синтеза Piper."""
+    text = re.sub(r"[*_#`~]", "", text)
+    text = text.replace("°C", " градусов")
+    text = text.replace("CPU", "процессора")
+    text = text.replace("%", " процента")
+
+    return re.sub(
+        r"[^А-Яа-яЁё0-9.,!?:\-\s]",
+        "",
+        text,
+    )
+
+
+def load_config() -> dict:
+    with open(
+        "config/config.yaml",
+        "r",
+        encoding="utf-8",
+    ) as config_file:
+        return yaml.safe_load(config_file)
+
+
+async def main() -> None:
+    config = load_config()
+    configure_logging(config.get("logging"))
+
+    assistant_name = config["assistant"]["name"]
+    wake_word = config["assistant"]["wake_word"]
+    wake_config = config["wake_word"]
+    audio_config = config.get("audio", {})
+
+    logger.info("Запуск ассистента %s.", assistant_name)
+
     brain = Brain(
         model_name=config["llm"]["model"],
         system_prompt_path="config/system_prompt.txt",
@@ -34,15 +69,14 @@ async def main() -> None:
     router = CommandRouter()
     executor = CommandExecutor()
 
-    # Инициализация звуковых модулей
-    stt = SpeechToText(model_size=config['stt']['whisper_model'])
+    stt = SpeechToText(
+        model_size=config["stt"]["whisper_model"]
+    )
 
-    wake_config = config["wake_word"]
     wake_backend = wake_config.get(
         "backend",
         "microwakeword",
     ).lower()
-
     cooldown_seconds = wake_config.get(
         "cooldown_seconds",
         1.5,
@@ -52,122 +86,120 @@ async def main() -> None:
         wake_detector = MicroWakeWordDetector(
             config_path=wake_config["model"],
             cooldown_seconds=cooldown_seconds,
-            probability_cutoff=wake_config.get("probability_cutoff"),
+            probability_cutoff=wake_config.get(
+                "probability_cutoff"
+            ),
             debug=wake_config.get("debug", False),
         )
-
     elif wake_backend == "vosk":
         wake_detector = VoskWakeWordDetector(
             model_path=wake_config["model"],
-            wake_words=[
-                config["assistant"].get(
-                    "wake_word",
-                    "Джарвис",
-                ).lower()
-            ],
+            wake_words=[wake_word.lower()],
             cooldown_seconds=cooldown_seconds,
         )
-
     else:
         raise ValueError(
-            f"Неизвестный wake-word backend: {wake_backend}"
+            "Неизвестный wake-word backend: "
+            f"{wake_backend}"
         )
 
-    mic = AudioInput(
+    microphone = AudioInput(
         wake_word_detector=wake_detector,
+        input_device_index=audio_config.get(
+            "input_device_index"
+        ),
+        debug=audio_config.get("debug", False),
     )
-    mic.calibrate()
+    microphone.calibrate()
 
     feedback = AudioFeedback()
 
-    # Сборка пути к модели Piper
     piper_model_path = os.path.join(
-        "assets", "models", "piper", config["tts"]["piper_model"]
+        "assets",
+        "models",
+        "piper",
+        config["tts"]["piper_model"],
     )
     tts = TextToSpeech(model_path=piper_model_path)
     speaker = AudioOutput()
 
-    print("\n" + "-" * 50)
-    print("[SYSTEM] Система готова. Ожидание команды 'Джарвис'")
-    print("-" * 50)
+    logger.info(
+        "Ассистент готов. Скажите «%s».",
+        wake_word,
+    )
 
-    while True:
-        try:
-            # 1. Ждем фразу "Джарвис"
-            mic.listen_for_wake_word()
-            feedback.play_activation()
-
-            # 2. Записываем команду до тишины
-            audio_file = mic.record_command()
-            if not audio_file:
-                continue
-
+    try:
+        while True:
             try:
-                print("[STT] Распознавание...")
-                user_text = stt.transcribe(audio_file)
+                microphone.listen_for_wake_word()
+                feedback.play_activation()
 
-            finally:
+                audio_file = microphone.record_command()
+
+                if not audio_file:
+                    continue
+
                 try:
-                    os.unlink(audio_file)
-                except FileNotFoundError:
-                    pass
+                    user_text = stt.transcribe(audio_file)
+                finally:
+                    try:
+                        os.unlink(audio_file)
+                    except FileNotFoundError:
+                        pass
 
-            print(f"\nВы сказали: {user_text}")
+                if not user_text:
+                    logger.info(
+                        "Речь не распознана. "
+                        "Возврат в режим ожидания."
+                    )
+                    continue
 
-            # Удаляем временный файл с голосом
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
+                logger.info("Пользователь: %s", user_text)
 
-            if not user_text.strip():
-                print("[SYSTEM] Ничего не услышал. Возврат в режим ожидания.")
-                continue
+                route = router.route(user_text)
 
-            # 4. Передаем текст в LLM
-            route = router.route(user_text)
+                if route is not None:
+                    response = executor.execute(
+                        route.command,
+                        route.arguments,
+                    )
+                else:
+                    response = brain.process_input(user_text)
 
-            if route is not None:
-                print(
-                    f"[ROUTER] Системная команда: "
-                    f"{route.command}"
+                clean_response = sanitize_for_tts(response)
+
+                if not clean_response:
+                    logger.warning(
+                        "После очистки для TTS ответ пуст."
+                    )
+                    continue
+
+                synthesized_file = tts.synthesize(
+                    clean_response
                 )
 
-                response = executor.execute(
-                    route.command,
-                    route.arguments,
+                if synthesized_file:
+                    try:
+                        speaker.play(synthesized_file)
+                    finally:
+                        try:
+                            os.remove(synthesized_file)
+                        except FileNotFoundError:
+                            pass
+
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                logger.exception(
+                    "Ошибка главного цикла."
                 )
-            else:
-                print("[ROUTER] Обычный запрос → LLM")
 
-                response = brain.process_input(user_text)
+    except KeyboardInterrupt:
+        logger.info("Завершение работы по Ctrl+C.")
+    finally:
+        microphone.close()
+        logger.info("Ассистент остановлен.")
 
-            # 5. Глубокая очистка и подготовка текста для Piper
-            clean_response = re.sub(r'[*_#`~]', '', response)
-
-            # Заменяем символы, которые ломают TTS (например, "69.0°C" -> "69.0 градусов")
-            clean_response = clean_response.replace('°C', ' градусов')
-            clean_response = clean_response.replace('CPU', 'процессора')
-            clean_response = clean_response.replace('%', ' процента')
-
-            # Убираем всё, кроме русских букв, цифр, знаков препинания и пробелов
-            # Это гарантирует, что Piper не подавится мусорными символами
-            clean_response = re.sub(r'[^А-Яа-яЁё0-9.,!?:\-\s]', '', clean_response)
-
-            # 6. Синтез речи
-            synthesized_file = tts.synthesize(clean_response)
-
-            # 7. Воспроизведение
-            if synthesized_file:
-                speaker.play(synthesized_file)
-                if os.path.exists(synthesized_file):
-                    os.remove(synthesized_file)
-
-        except KeyboardInterrupt:
-            print("\n[SYSTEM] Принудительное завершение работы (Ctrl+C)...")
-            break
-        except Exception as e:
-            print(f"[ОШИБКА] Произошел сбой в главном цикле: {e}")
-
-    print("[SYSTEM] Отключение систем...")
 
 if __name__ == "__main__":
     asyncio.run(main())

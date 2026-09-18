@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import logging
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -8,38 +11,25 @@ from pathlib import Path
 import numpy as np
 
 
+logger = logging.getLogger(__name__)
+
+
 class WakeWordDetector(ABC):
-    """Общий интерфейс wake-word detector."""
+    """Общий интерфейс детектора wake-word."""
 
     @abstractmethod
     def predict(self, audio_data: np.ndarray) -> bool:
-        """Возвращает True только при новом срабатывании."""
+        """Возвращает True при новом срабатывании."""
         raise NotImplementedError
 
     @abstractmethod
     def reset(self) -> None:
+        """Сбрасывает внутреннее состояние детектора."""
         raise NotImplementedError
 
 
 class MicroWakeWordDetector(WakeWordDetector):
-    """
-    Streaming wake-word detector на базе microWakeWord.
-
-    На вход принимает PCM int16 mono, 16 kHz.
-    Внутри:
-        PCM -> MicroWakeWordFeatures -> TFLite model
-
-    FIX: раньше этот класс использовал detector.process_streaming(feature),
-    встроенное bool-решение, которое ничего не сообщало о реальной
-    вероятности срабатывания. Если probability_cutoff модели оказывался
-    чуть выше реального пика вероятности для "Джарвис", детектор молча
-    никогда не срабатывал — и это было невозможно увидеть в логах.
-
-    Теперь используется process_streaming_prob() + явное сравнение с
-    настраиваемым cutoff, а при debug=True вероятность печатается в
-    реальном времени — то же самое, что делал test_mww.py при ручной
-    калибровке, но прямо в рабочем пайплайне main.py.
-    """
+    """Streaming wake-word detector на базе microWakeWord."""
 
     SAMPLE_RATE = 16000
 
@@ -59,14 +49,49 @@ class MicroWakeWordDetector(WakeWordDetector):
         self.cooldown_seconds = cooldown_seconds
         self.cooldown_until = 0.0
         self.debug = debug
+        self.last_debug_log_at = 0.0
 
         self.features = MicroWakeWordFeatures()
-        self.detector = MicroWakeWord.from_config(
-            self.config_path
-        )
+
+        if not self.config_path.is_file():
+            raise FileNotFoundError(
+                "Конфигурация wake-word не найдена: "
+                f"{self.config_path}"
+            )
+
+        captured_stdout = io.StringIO()
+
+        try:
+            with contextlib.redirect_stdout(captured_stdout):
+                self.detector = MicroWakeWord.from_config(
+                    self.config_path
+                )
+        except Exception as exc:
+            raise RuntimeError(
+                "Не удалось загрузить microWakeWord-модель "
+                f"из {self.config_path}: {exc}"
+            ) from exc
+
+        library_output = captured_stdout.getvalue().strip()
+
+        if library_output:
+            logger.debug(
+                "Вывод pymicro_wakeword при загрузке: %s",
+                library_output,
+            )
 
         if probability_cutoff is not None:
             self.detector.probability_cutoff = probability_cutoff
+
+        logger.info(
+            "Wake-word модель загружена: %s",
+            self.config_path.name,
+        )
+        logger.debug(
+            "Wake-word параметры: cutoff=%.3f, cooldown=%.1f с",
+            self.detector.probability_cutoff,
+            self.cooldown_seconds,
+        )
 
     def predict(self, audio_data: np.ndarray) -> bool:
         now = time.monotonic()
@@ -76,29 +101,29 @@ class MicroWakeWordDetector(WakeWordDetector):
         if audio_data.ndim > 1:
             audio_data = audio_data[:, 0]
 
-        audio_f32 = audio_data.astype(np.float32)
-        audio_f32 -= np.mean(audio_f32)
-
-        audio_data = np.clip(
-            audio_f32,
-            -32768,
-            32767,
-        ).astype(np.int16)
+        max_amplitude = int(np.abs(audio_data).max())
 
         for feature in self.features.process_streaming(
             audio_data.tobytes()
         ):
-            prob = self.detector.process_streaming_prob(feature)
+            probability = self.detector.process_streaming_prob(
+                feature
+            )
 
-            if self.debug:
-                print(
-                    f"\r[WAKEWORD] prob={prob:.3f} "
-                    f"cutoff={self.detector.probability_cutoff:.3f}   ",
-                    end="",
-                    flush=True,
+            if (
+                self.debug
+                and now - self.last_debug_log_at >= 1.0
+            ):
+                logger.debug(
+                    "Wake-word: probability=%.3f cutoff=%.3f "
+                    "max_amplitude=%d",
+                    probability,
+                    self.detector.probability_cutoff,
+                    max_amplitude,
                 )
+                self.last_debug_log_at = now
 
-            if prob < self.detector.probability_cutoff:
+            if probability < self.detector.probability_cutoff:
                 continue
 
             if now < self.cooldown_until:
@@ -106,9 +131,10 @@ class MicroWakeWordDetector(WakeWordDetector):
 
             self.cooldown_until = now + self.cooldown_seconds
 
-            if self.debug:
-                print()
-
+            logger.info(
+                "Wake-word обнаружен: probability=%.3f",
+                probability,
+            )
             return True
 
         return False
@@ -116,20 +142,13 @@ class MicroWakeWordDetector(WakeWordDetector):
     def reset(self) -> None:
         self.features.reset()
         self.detector.reset()
-
         self.cooldown_until = (
-            time.monotonic()
-            + self.cooldown_seconds
+            time.monotonic() + self.cooldown_seconds
         )
 
 
 class VoskWakeWordDetector(WakeWordDetector):
-    """
-    Старый Vosk backend.
-
-    Оставляем его как fallback, пока microWakeWord
-    полностью не проверен.
-    """
+    """Wake-word detector на базе Vosk."""
 
     SAMPLE_RATE = 16000
 
@@ -141,19 +160,29 @@ class VoskWakeWordDetector(WakeWordDetector):
     ) -> None:
         from vosk import KaldiRecognizer, Model
 
-        self.model = Model(str(model_path))
+        self.model_path = Path(model_path)
 
-        self.wake_words = (
-            wake_words
-            or ["джарвис"]
-        )
+        if not self.model_path.is_dir():
+            raise FileNotFoundError(
+                "Vosk-модель не найдена: "
+                f"{self.model_path}"
+            )
 
+        self.model = Model(str(self.model_path))
+        self.wake_words = [
+            word.lower().strip()
+            for word in (wake_words or ["джарвис"])
+        ]
         self.cooldown_seconds = cooldown_seconds
         self.cooldown_until = 0.0
-
         self.KaldiRecognizer = KaldiRecognizer
 
         self._create_recognizer()
+
+        logger.info(
+            "Vosk wake-word загружен: %s",
+            ", ".join(self.wake_words),
+        )
 
     def _create_recognizer(self) -> None:
         grammar = json.dumps(
@@ -167,10 +196,7 @@ class VoskWakeWordDetector(WakeWordDetector):
             grammar,
         )
 
-    def predict(
-        self,
-        audio_data: np.ndarray,
-    ) -> bool:
+    def predict(self, audio_data: np.ndarray) -> bool:
         now = time.monotonic()
 
         if now < self.cooldown_until:
@@ -185,54 +211,34 @@ class VoskWakeWordDetector(WakeWordDetector):
             audio_data.tobytes()
         )
 
-        text = ""
-
         if accepted:
-            result = json.loads(
-                self.recognizer.Result()
-            )
-
-            text = result.get(
-                "text",
-                "",
-            ).lower().strip()
-
+            result = json.loads(self.recognizer.Result())
+            text = result.get("text", "")
         else:
             result = json.loads(
                 self.recognizer.PartialResult()
             )
+            text = result.get("partial", "")
 
-            text = result.get(
-                "partial",
-                "",
-            ).lower().strip()
+        text = text.lower().strip()
 
         if not self._contains_wake_word(text):
             return False
 
-        self.cooldown_until = (
-            now + self.cooldown_seconds
-        )
-
+        self.cooldown_until = now + self.cooldown_seconds
         self.recognizer.Reset()
 
+        logger.info("Wake-word обнаружен: %s", text)
         return True
 
-    def _contains_wake_word(
-        self,
-        text: str,
-    ) -> bool:
-        words = text.split()
-
+    def _contains_wake_word(self, text: str) -> bool:
         return any(
-            word in self.wake_words
-            for word in words
+            wake_word in text
+            for wake_word in self.wake_words
         )
 
     def reset(self) -> None:
         self.cooldown_until = (
-            time.monotonic()
-            + self.cooldown_seconds
+            time.monotonic() + self.cooldown_seconds
         )
-
         self.recognizer.Reset()
