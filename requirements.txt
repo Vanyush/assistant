@@ -1,0 +1,9 @@
+faster-whisper
+numpy
+openai
+piper-tts
+psutil
+pyaudio
+pymicro-wakeword
+PyYAML
+vosk

@@ -5,3 +5,5 @@ core/__pycache__/applications.cpython-311.pyc
 core/__pycache__/audio_feedback.cpython-311.pyc
 core/__pycache__/audio_input.cpython-311.pyc
 core/__pycache__/wake_word.cpython-311.pyc
+logs/
+.venv/

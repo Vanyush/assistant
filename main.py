@@ -131,6 +131,11 @@ async def main() -> None:
     try:
         while True:
             try:
+                logger.info(
+                    "Ожидание wake-word: «%s».",
+                    wake_word,
+                )
+
                 microphone.listen_for_wake_word()
                 feedback.play_activation()
 

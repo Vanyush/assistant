@@ -122,7 +122,7 @@ def get_system_status() -> str:
     temps = psutil.sensors_temperatures()
     temp_str = ""
     if 'k10temp' in temps:
-        temp_str = f"Температура процессора: {temps['k10temp'][0].current}°C. "
+        temp_str = f"Температура процессора: {temps['k10temp'][0].current:.0f}°C. "
 
     return f"{temp_str}Загрузка CPU: {cpu}%. Использование оперативной памяти: {ram}%."
 

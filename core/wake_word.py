@@ -196,7 +196,10 @@ class VoskWakeWordDetector(WakeWordDetector):
             grammar,
         )
 
-    def predict(self, audio_data: np.ndarray) -> bool:
+    def predict(
+        self,
+        audio_data: np.ndarray,
+    ) -> bool:
         now = time.monotonic()
 
         if now < self.cooldown_until:
@@ -211,25 +214,38 @@ class VoskWakeWordDetector(WakeWordDetector):
             audio_data.tobytes()
         )
 
-        if accepted:
-            result = json.loads(self.recognizer.Result())
-            text = result.get("text", "")
-        else:
-            result = json.loads(
-                self.recognizer.PartialResult()
-            )
-            text = result.get("partial", "")
+        # PartialResult нестабилен и часто даёт ложные
+        # совпадения для грамматики из одного слова.
+        if not accepted:
+            return False
 
-        text = text.lower().strip()
+        result = json.loads(self.recognizer.Result())
+
+        text = result.get(
+            "text",
+            "",
+        ).lower().strip()
+
+        logger.debug(
+            "Финальный результат Vosk wake-word: %r",
+            text,
+        )
 
         if not self._contains_wake_word(text):
             return False
 
-        self.cooldown_until = now + self.cooldown_seconds
+        self.cooldown_until = (
+            now + self.cooldown_seconds
+        )
         self.recognizer.Reset()
 
-        logger.info("Wake-word обнаружен: %s", text)
+        logger.info(
+            "Wake-word обнаружен: %s",
+            text,
+        )
+
         return True
+
 
     def _contains_wake_word(self, text: str) -> bool:
         return any(

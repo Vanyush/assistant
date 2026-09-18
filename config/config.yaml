@@ -1,10 +1,11 @@
 assistant:
-  name: "Джарвис"
-  wake_word: "Куза"
+  name: "Димас"
+  wake_word: "слушай димас"
 
 logging:
   console_level: "INFO"
-  file_level: "DEBUG"
+  file_level: "INFO"
+  # file_level: "DEBUG"
   file: "logs/assistant.log"
 
 llm:
@@ -25,7 +26,12 @@ audio:
   debug: false
 
 wake_word:
-  backend: "microwakeword"
-  model: "assets/models/wake_word/kuza/kuza.json"
-  cooldown_seconds: 1.5
-  debug: false
+  backend: "vosk"
+  model: "assets/models/wake_word/vosk/vosk-model-small-ru-0.22"
+  cooldown_seconds: 2.0
+
+# wake_word:
+#   backend: "microwakeword"
+#   model: "assets/models/wake_word/kuza/kuza.json"
+#   cooldown_seconds: 1.5
+#   debug: false
