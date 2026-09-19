@@ -30,6 +30,12 @@ wake_word:
   model: "assets/models/wake_word/vosk/vosk-model-small-ru-0.22"
   cooldown_seconds: 2.0
 
+spotify:
+  player: spotify
+  command_timeout_seconds: 5.0
+  my_music_playlist: "spotify:playlist:37i9dQZF1F5p3rmiWPIYgZ"
+  default_shuffle: true
+
 # wake_word:
 #   backend: "microwakeword"
 #   model: "assets/models/wake_word/kuza/kuza.json"

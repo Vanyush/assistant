@@ -67,7 +67,13 @@ async def main() -> None:
         max_tokens=config["llm"].get("max_tokens", 256),
     )
     router = CommandRouter()
-    executor = CommandExecutor()
+
+    executor = CommandExecutor(
+        spotify_config=config.get(
+            "spotify",
+            {},
+        )
+    )
 
     stt = SpeechToText(
         model_size=config["stt"]["whisper_model"]
