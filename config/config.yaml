@@ -4,8 +4,8 @@ assistant:
 
 logging:
   console_level: "INFO"
-  file_level: "INFO"
-  # file_level: "DEBUG"
+  #file_level: "INFO"
+  file_level: "DEBUG"
   file: "logs/assistant.log"
 
 llm:
