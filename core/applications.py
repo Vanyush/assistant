@@ -99,7 +99,7 @@ class ApplicationResolver:
     }
 
     FLATPAK_APPS = {
-        "marktext": "io.github.marktext.marktext",
+        "marktext": "com.github.marktext.marktext",
         "spotify": "com.spotify.Client",
         "telegram": "org.telegram.desktop",
         "heroic": "com.heroicgameslauncher.hgl",
