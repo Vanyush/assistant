@@ -99,8 +99,8 @@ class CommandExecutor:
     @staticmethod
     def _create_note(title: str) -> str:
         title = title.strip().strip(chr(34) + "'«»")
-        title = re.sub(r'[\\x00-\\x1f/\\\\:*?<>|]', "-", title)
-        title = re.sub(r"\\s+", " ", title).strip(" .")
+        title = re.sub(r'[\x00-\x1f/\\\\:*?<>|]', "-", title)
+        title = re.sub(r"\s+", " ", title).strip(" .")
         if not title:
             return "Название заметки не может быть пустым."
 
@@ -110,7 +110,7 @@ class CommandExecutor:
             note_path = notes_dir / f"{title}.md"
             if note_path.exists():
                 return f"Заметка уже существует: {note_path}"
-            note_path.write_text(f"# {title}\\n\\n", encoding="utf-8")
+            note_path.write_text(f"# {title}\n\n", encoding="utf-8")
         except OSError as exc:
             logger.exception("Не удалось создать заметку.")
             return f"Ошибка создания заметки: {exc}"
