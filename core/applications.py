@@ -117,6 +117,10 @@ class ApplicationResolver:
             "text editor",
         },
 
+        "marktext": {
+            "marktext",
+        },
+
         "file manager": {
             "files",
         },
