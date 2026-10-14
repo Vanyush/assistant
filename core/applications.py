@@ -48,6 +48,7 @@ class ApplicationResolver:
         "telegram": "telegram",
         "телеграм": "telegram",
         "телега": "telegram",
+        "телегу": "telegram",
         "телеграмм": "telegram",
 
         # Chrome
@@ -80,7 +81,8 @@ class ApplicationResolver:
 
         # Heroic
         "heroic": "heroic",
-        "херойк": "heroic",
+        "хероик": "heroic",
+        "героик":"heroic",
 
         # OBS
         "obs": "obs",
