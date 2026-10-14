@@ -22,7 +22,7 @@ stt:
   whisper_model: "small"
 
 audio:
-  input_device_index: 5
+  input_device_index: null
   debug: false
 
 wake_word:

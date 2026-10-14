@@ -8,7 +8,7 @@ import shutil
     "браузер, хром, телеграм, терминал, блокнот, файлы. Никаких английских названий процессов!"
 )
 def open_application(app_name: str) -> str:
-    """Запускает приложение в Linux Mint с точным маппингом синонимов."""
+    """Запускает приложение в Linux с точным маппингом синонимов."""
     app_name_clean = app_name.lower().strip()
 
     # Словарь синонимов (что бы ни прислала модель, привязываем к четким ключам)
@@ -126,12 +126,17 @@ def get_system_status() -> str:
 
     return f"{temp_str}Загрузка CPU: {cpu}%. Использование оперативной памяти: {ram}%."
 
-@register_tool("Изменить общую громкость системы Linux Mint")
+@register_tool("Изменить общую громкость системы через PipeWire/PulseAudio")
 def set_volume(level: int) -> str:
-    # Используем amixer (стандартная утилита в Linux Mint/Ubuntu)
     level = max(0, min(100, level))
-    subprocess.run(["amixer", "-D", "pulse", "sset", "Master", f"{level}%"], capture_output=True)
-    return f"Громкость системы установлена на {level}%."
+    try:
+        subprocess.run(
+            ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{level}%"],
+            capture_output=True, text=True, check=True,
+        )
+        return f"Громкость системы установлена на {level}%."
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return f"Не удалось изменить громкость: {exc}"
 
 @register_tool("Увеличить громкость системы Linux Mint")
 def volume_up(step: int = 10) -> str:
