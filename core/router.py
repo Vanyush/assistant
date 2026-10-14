@@ -28,6 +28,10 @@ class CommandRouter:
         if not text:
             return None
 
+        route = self._route_create_note(text)
+        if route is not None:
+            return route
+
         route = self._route_volume(text)
         if route is not None:
             return route
@@ -53,6 +57,16 @@ class CommandRouter:
             return route
 
         return None
+
+    @staticmethod
+    def _route_create_note(text: str) -> Route | None:
+        match = re.fullmatch(r'(?:создай|создать)\s+заметку\s+["«]?(.+?)["»]?', text)
+        if not match:
+            return None
+        title = match.group(1).strip().strip(chr(34) + "'«»")
+        if not title:
+            return None
+        return Route(command="create_note", arguments={"title": title})
 
     @staticmethod
     def _normalize(text: str) -> str:
