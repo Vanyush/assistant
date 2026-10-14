@@ -33,6 +33,9 @@ class ApplicationResolver:
 
     APPLICATION_DIRS = (
         Path.home() / ".local/share/applications",
+        Path.home() / ".local/share/flatpak/exports/share/applications",
+        Path("/var/lib/flatpak/exports/share/applications"),
+        Path("/usr/local/share/applications"),
         Path("/usr/share/applications"),
     )
 
@@ -59,6 +62,9 @@ class ApplicationResolver:
 
         # Browser
         "браузер": "browser",
+        "браузы": "browser",
+        "браузерок": "browser",
+        "интернет": "browser",
 
         # Text editor
         "marktext": "marktext",
@@ -93,6 +99,7 @@ class ApplicationResolver:
     }
 
     FLATPAK_APPS = {
+        "marktext": "io.github.marktext.marktext",
         "spotify": "com.spotify.Client",
         "telegram": "org.telegram.desktop",
         "heroic": "com.heroicgameslauncher.hgl",
@@ -332,6 +339,7 @@ class ApplicationResolver:
             and self._flatpak_installed(flatpak_id)
         ):
             display_names = {
+                "marktext": "MarkText",
                 "spotify": "Spotify",
                 "telegram": "Telegram",
                 "heroic": "Heroic Games Launcher",
@@ -350,6 +358,24 @@ class ApplicationResolver:
                 exec_command=None,
                 flatpak_id=flatpak_id,
             )
+
+        # Для команды «браузер» пробуем установленные Flatpak-браузеры
+        # в предсказуемом порядке, если Firefox не установлен.
+        if canonical == "browser":
+            for app_id, display_name in (
+                ("org.mozilla.firefox", "Firefox"),
+                ("com.google.Chrome", "Google Chrome"),
+                ("org.chromium.Chromium", "Chromium"),
+                ("com.brave.Browser", "Brave"),
+            ):
+                if self._flatpak_installed(app_id):
+                    return Application(
+                        name=display_name,
+                        generic_name="Web Browser",
+                        desktop_file=None,
+                        exec_command=None,
+                        flatpak_id=app_id,
+                    )
 
         # --------------------------------------------------------------
         # 2. Предпочтительное desktop имя
