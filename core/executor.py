@@ -41,9 +41,10 @@ class CommandExecutor:
             return self._create_note(arguments.get("title", ""))
 
         if command == "open_application":
-            return self.applications.launch(
-                arguments.get("app_name", "")
-            )
+            app_name = arguments.get("app_name", "")
+            if self.applications._resolve_alias(app_name) == "marktext":
+                return self._open_blank_note()
+            return self.applications.launch(app_name)
 
         if command == "close_application":
             return self.applications.close(
@@ -97,6 +98,58 @@ class CommandExecutor:
             return f"Ошибка выполнения команды: {exc}"
 
     @staticmethod
+    def _launch_marktext(note_path: Path) -> str | None:
+        """Открывает конкретный Markdown-файл в MarkText."""
+        if shutil.which("marktext"):
+            command = ["marktext", str(note_path)]
+        elif shutil.which("flatpak"):
+            app_id = "com.github.marktext.marktext"
+            check = subprocess.run(
+                ["flatpak", "info", app_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if check.returncode:
+                return "MarkText не найден среди установленных приложений."
+            command = ["flatpak", "run", app_id, str(note_path)]
+        else:
+            return "Не найдена команда marktext или flatpak."
+
+        try:
+            subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            logger.exception("Не удалось открыть файл в MarkText.")
+            return f"Не удалось запустить MarkText: {exc}"
+        return None
+
+    @staticmethod
+    def _open_blank_note() -> str:
+        """Создаёт отдельный пустой Markdown-файл и открывает его."""
+        notes_dir = Path("/home/vanyusha/Notes")
+        try:
+            notes_dir.mkdir(parents=True, exist_ok=True)
+            note_path = notes_dir / "Новая заметка.md"
+            index = 2
+            while note_path.exists():
+                note_path = notes_dir / f"Новая заметка {index}.md"
+                index += 1
+            note_path.write_text("", encoding="utf-8")
+        except OSError as exc:
+            logger.exception("Не удалось создать пустую заметку.")
+            return f"Не удалось создать пустую заметку: {exc}"
+
+        error = CommandExecutor._launch_marktext(note_path)
+        if error:
+            return f"Файл создан: {note_path}. {error}"
+        return f"Открыта пустая заметка в MarkText: {note_path}"
+
+    @staticmethod
     def _create_note(title: str) -> str:
         title = title.strip().strip(chr(34) + "'«»")
         title = re.sub(r'[\x00-\x1f/\\\\:*?<>|]', "-", title)
@@ -115,23 +168,7 @@ class CommandExecutor:
             logger.exception("Не удалось создать заметку.")
             return f"Ошибка создания заметки: {exc}"
 
-        try:
-            if shutil.which("marktext"):
-                command = ["marktext", str(note_path)]
-            elif shutil.which("flatpak"):
-                check = subprocess.run(
-                    ["flatpak", "info", "io.github.marktext.marktext"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                if check.returncode:
-                    return f"Заметка создана: {note_path}. MarkText не найден."
-                command = ["flatpak", "run", "io.github.marktext.marktext", str(note_path)]
-            else:
-                return f"Заметка создана: {note_path}. MarkText не найден."
-            subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError as exc:
-            logger.exception("Не удалось открыть заметку в MarkText.")
-            return f"Заметка создана: {note_path}, но MarkText не запустился: {exc}"
+        error = CommandExecutor._launch_marktext(note_path)
+        if error:
+            return f"Заметка создана: {note_path}. {error}"
         return f"Создана заметка и открыта в MarkText: {note_path}"
