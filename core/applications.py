@@ -61,9 +61,11 @@ class ApplicationResolver:
         "браузер": "browser",
 
         # Text editor
-        "marktext": "marktext",\n        "марк текст": "marktext",\n        "блокнот": "text editor",
-        "текстовый редактор": "text editor",
-        "редактор": "text editor",
+        "marktext": "marktext",
+        "марк текст": "marktext",
+        "блокнот": "marktext",
+        "текстовый редактор": "marktext",
+        "редактор": "marktext",
 
         # File manager
         "файлы": "file manager",
